@@ -5,7 +5,7 @@ use embedded_graphics::image::ImageRawLE;
 use embedded_graphics::{
     mono_font::{ascii::FONT_6X10, MonoTextStyle},
     pixelcolor::Rgb565,
-    prelude::*,
+    prelude::*, 
     text::Text
 };
 use esp_idf_hal::delay::FreeRtos;
@@ -14,18 +14,32 @@ use esp_idf_hal::gpio::PinDriver;
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_hal::prelude::*;
 use esp_idf_hal::spi;
-
-
+use esp_idf_sys as _;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
 use st7735_lcd;
 use st7735_lcd::Orientation;
 
-fn main() -> Result<()> {
+mod wifi;
+mod display_wrapper;
+
+
+#[toml_cfg::toml_config]
+pub struct Config {
+    #[default("")]
+    wifi_ssid: &'static str,
+    #[default("")]
+    wifi_psk: &'static str,
+}
+
+fn main() -> anyhow::Result<()> {
     esp_idf_sys::link_patches();
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
     let peripherals = Peripherals::take().unwrap();
+    let sysloop = EspSystemEventLoop::take()?;
 
+    //Initialize SPI stuff for display
     let spi = peripherals.spi2;
     let sclk = peripherals.pins.gpio6;
     let sdo = peripherals.pins.gpio7;
@@ -53,7 +67,7 @@ fn main() -> Result<()> {
     display
         .set_orientation(&Orientation::LandscapeSwapped)
         .unwrap();
-    display.set_offset(0, 25);
+    display.set_offset(0, 0);
 
     let image_raw: ImageRawLE<Rgb565> =
         ImageRaw::new(include_bytes!("../ferris.raw"), 86);
@@ -65,19 +79,31 @@ fn main() -> Result<()> {
     let style = MonoTextStyle::new(&FONT_6X10, Rgb565::WHITE);
 
 // Create a text at position (20, 30) and draw it using the previously defined style
+    let app_config = CONFIG;
 
+    let mut led_blink = PinDriver::output(peripherals.pins.gpio15).unwrap();
+    // Time to literally connect to wifi bitches!
+    let mut stringToShow = String::from("Everything went well!");
+    let _ = match wifi::wifi(
+        "Lol",
+        "testtest",
+        peripherals.modem,
+        sysloop,
+    ) {
+        Ok(lol) => stringToShow = "Everything Went Well".to_string(),
+        Err(err) => {
+            stringToShow = err.to_string();
+        }
+    };
 
     println!("lcd test have done.");
-    let mut led_blink = PinDriver::output(peripherals.pins.gpio15).unwrap();
 
     loop {
-        led_blink.set_high().unwrap();
         // we are sleeping here to make sure the watchdog isn't triggered
         image.draw(&mut display).unwrap();
         FreeRtos::delay_ms(1000);
 
-        Text::new("Hello Rust!", Point::new(20, 30), style).draw(&mut display).unwrap();
-        led_blink.set_low().unwrap();
+        Text::new(&stringToShow, Point::new(20, 30), style).draw(&mut display).unwrap();
         FreeRtos::delay_ms(1000);
     }
 }
